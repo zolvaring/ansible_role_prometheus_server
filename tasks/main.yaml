@@ -1,0 +1,121 @@
+---
+# file: .../ansible/roles/prometheus_server/tasks/main.yaml
+
+
+- name: Add Prometheus system group
+  group:
+    name: prometheus
+    state: present
+    system: yes
+  become: true
+
+
+- name: Add Prometheus system user
+  user:
+    name: prometheus
+    shell: /bin/nologin
+    system: yes
+  become: true
+
+
+- name: Create Prometheus runtime data directory
+  file:
+    path: /var/lib/prometheus
+    state: directory
+    owner: prometheus
+    group: prometheus
+  become: true
+
+
+- name: Create Prometheus configuration directories
+  file:
+    path: "{{ filepath }}"
+    owner: prometheus
+    group: prometheus
+    mode: 0775
+  become: true
+  loop_control:
+    loop_var: filepath
+  loop:
+    - /etc/prometheus
+    - /etc/promethues/rules
+    - /etc/prometheus/rules.d
+    - /etc/prometheus/files_sd
+
+
+# FIXME: not idempotent
+# TODO: parameterize url
+- name: Download latest Prometheus installation archive
+  get_url:
+    url: https://github.com/prometheus/prometheus/releases/download/v2.6.0/prometheus-2.6.0.linux-amd64.tar.gz
+    dest: /tmp/prometheus.linux-amd64.tar.gz
+  become: true
+
+
+- name: Extract the Prometheus installation archive
+  unarchive:
+    src: /tmp/prometheus.linux-amd64.tar.gz
+    dest: /tmp/prometheus.linux-amd64
+  become: true
+
+
+- name: Copy Prometheus binaries to directory in path
+  copy:
+    src: "/tmp/prometheus.linux-amd64/{{ binary }}"
+    dest: "/usr/local/bin/{{ binary }}"
+    remote_src: true
+  become: true
+  loop_control:
+    loop_var: binary
+  loop:
+    - prometheus
+    - promtool
+
+
+- name: Copy Prometheus consoles and console libraries to configuration directory
+  copy:
+    src: "/tmp/prometheus.linux-amd64/{{ filepath }}"
+    dest: "/etc/prometheus/{{ filepath }}"
+  remote_src: true
+  become: true
+  loop_control:
+    loop_var: filepath
+  loop:
+    - consoles
+    - console_libraries
+
+
+- name: Deploy Prometheus configuration file
+  template:
+    src: ../templates/prometheus_simple_sample.yaml
+    dest: /etc/prometheus/prometheus.yaml
+  become: true
+
+
+- name: Deploy Prometheus service file
+  template:
+    src: ../templates/prometheus_service
+    dest: /etc/systemd/system/prometheus.service
+  become: true
+  notify: reload systemd
+
+
+# Need systemd to reload prior to continuing
+- meta: flush_handlers
+
+
+- name: Start and enable Prometheus
+  service:
+    name: prometheus
+    state: started
+    enabled: yes
+  become: true
+
+
+- name: Open firewall port
+  firewalld:
+    port: 9090/tcp
+    state: enabled
+    permanent: yes
+  become: true
+  notify: reload firewalld
